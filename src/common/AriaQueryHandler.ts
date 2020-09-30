@@ -18,6 +18,7 @@ import { InternalQueryHandler } from './QueryHandler.js';
 import { ElementHandle, JSHandle } from './JSHandle.js';
 import { Protocol } from 'devtools-protocol';
 import { CDPSession } from './Connection.js';
+import { DOMWorld, WaitForSelectorOptions } from './DOMWorld.js';
 
 async function queryAXTree(
   client: CDPSession,
@@ -82,8 +83,17 @@ const queryOne = async (
   return exeCtx._adoptBackendNodeId(res[0].backendDOMNodeId);
 };
 
-const waitFor = () => {
-  throw new Error('waitForSelector is not supported for aria selectors');
+const waitFor = async (
+  domWorld: DOMWorld,
+  selector: string,
+  options: WaitForSelectorOptions
+) => {
+  await addHandlerToWorld(domWorld);
+  return domWorld.waitForSelectorInPage(
+    (_: Element, selector: string) => globalThis.ariaQuerySelector(selector),
+    selector,
+    options
+  );
 };
 
 const queryAll = async (
@@ -110,6 +120,29 @@ const queryAllArray = async (
   );
   return jsHandle;
 };
+
+// If multiple waitFor are set up asynchronously, we need to wait for the first
+// one to set up the binding in the page before running the others.
+let settingUpBinding = null;
+
+async function addHandlerToWorld(domWorld: DOMWorld) {
+  if (settingUpBinding) {
+    await settingUpBinding;
+  }
+  if (!domWorld.hasBinding('ariaQuerySelector')) {
+    let done: () => void | null = null;
+    settingUpBinding = new Promise((resolve) => {
+      done = resolve;
+    });
+    await domWorld.addBinding('ariaQuerySelector', async (selector: string) => {
+      const document = await domWorld._document();
+      const element = await queryOne(document, selector);
+      return element;
+    });
+    done();
+    settingUpBinding = null;
+  }
+}
 
 /**
  * @internal
